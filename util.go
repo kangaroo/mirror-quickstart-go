@@ -19,6 +19,9 @@ import (
 	"net/url"
 	"strings"
 
+	"bytes"
+	"encoding/gob"
+
 	"code.google.com/p/goauth2/oauth"
 	"github.com/gorilla/sessions"
 
@@ -26,6 +29,10 @@ import (
 	"appengine/datastore"
 	"appengine/urlfetch"
 )
+
+type TokenInfo struct {
+	Token []byte
+}
 
 // Cookie store used to store the user's ID in the current session.
 var store = sessions.NewCookieStore([]byte(secret))
@@ -83,7 +90,15 @@ func userID(r *http.Request) (string, error) {
 func storeCredential(c appengine.Context, userID string, token *oauth.Token) error {
 	// Store the tokens in the datastore.
 	key := datastore.NewKey(c, "OAuth2Token", userID, 0, nil)
-	_, err := datastore.Put(c, key, token)
+	m := new(bytes.Buffer)
+	enc := gob.NewEncoder(m)
+	enc.Encode(token)
+	tokenInfo := new(TokenInfo)
+	tokenInfo.Token = m.Bytes()
+	_, err := datastore.Put(c, key, tokenInfo)
+	if err != nil {
+		c.Errorf("Set Token: %v", err)
+	}
 	return err
 }
 
@@ -91,8 +106,14 @@ func storeCredential(c appengine.Context, userID string, token *oauth.Token) err
 func authTransport(c appengine.Context, userID string) *oauth.Transport {
 	key := datastore.NewKey(c, "OAuth2Token", userID, 0, nil)
 	tok := new(oauth.Token)
-	if err := datastore.Get(c, key, tok); err != nil {
+	tokenInfo := new(TokenInfo)
+	if err := datastore.Get(c, key, tokenInfo); err != nil {
 		c.Errorf("Get Token: %v", err)
+		return nil
+	}
+	dec := gob.NewDecoder(bytes.NewBuffer(tokenInfo.Token))
+	if err := dec.Decode(&tok); err != nil {
+		c.Errorf("Decode Token: %v", err)
 		return nil
 	}
 	return &oauth.Transport{
